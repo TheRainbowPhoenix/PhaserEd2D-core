@@ -1,0 +1,119 @@
+
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+
+    <title>Phaser Editor 2D - v3.33.2</title>
+
+	<link rel="icon" type="image/png" href="static/favicon.png">
+
+
+	<!-- plugin:colibri -->
+	<link href="app/plugins/colibri/styles/controls.css?v=12749.1654026040000" rel="stylesheet">
+	<link href="app/plugins/colibri/styles/dark.css?v=4267.1654026040000" rel="stylesheet">
+	<link href="app/plugins/colibri/styles/light.css?v=4035.1654026040000" rel="stylesheet">
+	<link href="app/plugins/colibri/styles/workbench.css?v=930.1654026040000" rel="stylesheet">
+
+	<!-- plugin:colibri.inspector -->
+	<link href="app/plugins/colibri.inspector/styles/InspectorView.css?v=508.1654026040000" rel="stylesheet">
+
+	<!-- plugin:phasereditor2d.allInOne -->
+
+	<!-- plugin:phasereditor2d.blocks -->
+
+	<!-- plugin:phasereditor2d.code -->
+	<link href="app/plugins/phasereditor2d.code/scripts/monaco-editor-0.25.2/min/vs/editor/editor.main.css?v=71709.1654026040000" rel="stylesheet">
+	<link href="app/plugins/phasereditor2d.code/styles/MonacoEditor.css?v=113.1654026040000" rel="stylesheet">
+
+	<!-- plugin:phasereditor2d.files -->
+	<link href="app/plugins/phasereditor2d.files/styles/controls.css?v=80.1654026040000" rel="stylesheet">
+
+	<!-- plugin:phasereditor2d.ide -->
+	<link href="app/plugins/phasereditor2d.ide/styles/controls.css?v=153.1654026040000" rel="stylesheet">
+	<link href="app/plugins/phasereditor2d.ide/styles/lightBlue.css?v=3683.1654026040000" rel="stylesheet">
+	<link href="app/plugins/phasereditor2d.ide/styles/lightGray.css?v=1009.1654026040000" rel="stylesheet">
+
+	<!-- plugin:phasereditor2d.images -->
+	<link href="app/plugins/phasereditor2d.images/styles/ImageEditor-dark.css?v=61.1654026040000" rel="stylesheet">
+	<link href="app/plugins/phasereditor2d.images/styles/ImageEditor-light.css?v=62.1654026040000" rel="stylesheet">
+	<link href="app/plugins/phasereditor2d.images/styles/ImageEditor.css?v=165.1654026040000" rel="stylesheet">
+
+	<!-- plugin:phasereditor2d.outline -->
+
+	<!-- plugin:phasereditor2d.pack -->
+	<link href="app/plugins/phasereditor2d.pack/styles/AssetPackEditor.css?v=191.1654026040000" rel="stylesheet">
+
+	<!-- plugin:phasereditor2d.phaser -->
+
+	<!-- plugin:phasereditor2d.scene -->
+	<link href="app/plugins/phasereditor2d.scene/styles/SceneEditor.css?v=2037.1654026040000" rel="stylesheet">
+
+	<!-- plugin:phasereditor2d.webContentTypes -->
+
+	<!-- plugin:phasereditor2d.animations -->
+	<link href="app/plugins/phasereditor2d.animations/styles/AnimationsEditor.css?v=466.1654026040000" rel="stylesheet">
+
+</head>
+
+<body>
+
+	<!-- plugin:colibri -->
+	<script src="app/plugins/colibri/scripts/vanilla-picker/vanilla-picker.js?v=43410.1654026040000"></script>
+	<script src="app/plugins/colibri/scripts/expr-eval/expr-eval.js?v=51488.1654026040000"></script>
+	<script src="app/plugins/colibri/_out/colibri.js?v=509881.1654026040000"></script>
+
+	<!-- plugin:colibri.inspector -->
+	<script src="app/plugins/colibri.inspector/_out/colibri.inspector.js?v=4884.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.allInOne -->
+	<script src="app/plugins/phasereditor2d.allInOne/_out/phasereditor2d.allInOne.js?v=4087.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.blocks -->
+	<script src="app/plugins/phasereditor2d.blocks/_out/phasereditor2d.blocks.js?v=2443.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.code -->
+	<script src="app/plugins/phasereditor2d.code/_out/phasereditor2d.code.js?v=52468.1654026040000"></script>
+	<script src="app/plugins/phasereditor2d.code/scripts/monaco-editor-0.25.2/defineRequire.js?v=105.1654026040000"></script>
+	<script src="app/plugins/phasereditor2d.code/scripts/monaco-editor-0.25.2/min/vs/loader.js?v=32173.1654026040000"></script>
+	<script src="app/plugins/phasereditor2d.code/scripts/monaco-editor-0.25.2/min/vs/editor/editor.main.nls.js?v=63917.1654026040000"></script>
+	<script src="app/plugins/phasereditor2d.code/scripts/monaco-editor-0.25.2/min/vs/editor/editor.main.js?v=2608835.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.files -->
+	<script src="app/plugins/phasereditor2d.files/_out/phasereditor2d.files.js?v=91049.1654026040000"></script>
+	<script src="app/plugins/phasereditor2d.files/scripts/filesize/filesize.js?v=4709.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.ide -->
+	<script src="app/plugins/phasereditor2d.ide/scripts/showdown.min.js?v=75494.1654026040000"></script>
+	<script src="app/plugins/phasereditor2d.ide/_out/phasereditor2d.ide.js?v=36961.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.images -->
+	<script src="app/plugins/phasereditor2d.images/_out/phasereditor2d.images.js?v=5212.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.outline -->
+	<script src="app/plugins/phasereditor2d.outline/_out/phasereditor2d.outline.js?v=1977.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.pack -->
+	<script src="app/plugins/phasereditor2d.pack/_out/phasereditor2d.pack.js?v=298936.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.phaser -->
+	<script src="app/plugins/phasereditor2d.phaser/_out/phasereditor2d.phaser.js?v=865.1654026040000"></script>
+	<script src="app/plugins/phasereditor2d.phaser/scripts/phaser.min.js?v=1042822.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.scene -->
+	<script src="app/plugins/phasereditor2d.scene/libs/localforage.js?v=125521.1654026040000"></script>
+	<script src="app/plugins/phasereditor2d.scene/_out/phasereditor2d.scene.js?v=1285768.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.webContentTypes -->
+	<script src="app/plugins/phasereditor2d.webContentTypes/_out/phasereditor2d.webContentTypes.js?v=6747.1654026040000"></script>
+
+	<!-- plugin:phasereditor2d.animations -->
+	<script src="app/plugins/phasereditor2d.animations/_out/phasereditor2d.animations.js?v=90661.1654026040000"></script>
+
+</body>
+
+</html>
