@@ -1,0 +1,1 @@
+venv\Scripts\pyinstaller.exe main.py  -c -F --name=PhaserEditor2D --icon=docs\icon.ico

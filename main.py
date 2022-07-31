@@ -1,27 +1,28 @@
 """
 Phaser Ed 2D core server ptyhon single-file !
+Trying to be as compatible as possible ...
 
 How cool is that ?
 Need Pyton 3.10+, fastapi, jinja2 & uvicorn
 """
 import argparse
-import json
 import re
 import shutil
 import sys
 import time
-import types
+import json
+from asyncio import Task
 from collections import defaultdict
-from typing import Union, Dict, List
+from typing import Union, Dict, List, Awaitable, Optional
 import os
 import pathlib
 import hashlib
 import asyncio
+import webbrowser
 
 from fastapi import FastAPI, Request, UploadFile, Form
 from fastapi.templating import Jinja2Templates
-from starlette.background import BackgroundTasks
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 from pydantic import BaseModel, BaseSettings
@@ -34,10 +35,11 @@ class Settings(BaseSettings):
     hash: str = ''
 
 
+# Simple setting base, used for shared config and hash passing
 settings = Settings()
 
 
-# API models here
+# API models here - Recreated from AJAX calls
 
 class APIRequest(BaseModel):
     __track__ = defaultdict(list)
@@ -126,7 +128,7 @@ class CopyFile(APIRequest):
     method: Literal['CopyFile']
     body: CopyFileBody
 
-# {"method":"MoveFiles","body":{"movingPaths":["test_phaser_sunny_land/test_folder/hello.txt"],"movingToPath":"test_phaser_sunny_land"}}
+
 class MoveFilesBody(BaseModel):
     movingPaths: List[str]
     movingToPath: str
@@ -192,31 +194,36 @@ def _list_files(start_path, counters: Dict[str, int]):
 
 
 def get_files_list(d):
+    """
+    Get all files in project and return them as JSON
+    :param d: directory path
+    :return: json object
+    """
     base = {
         "rootFile": {
             "name": os.path.basename(d),
             "modTime": get_mod_time(d),
             "size": 4096,
             "children": []
-        }, "maxNumberOfFiles": 0, "projectNumberOfFiles": 0, "hash": settings.hash }
+        }, "maxNumberOfFiles": 0, "projectNumberOfFiles": 0, "hash": settings.hash}
 
     counter = {'file': 0, 'dir': 0}
     base["rootFile"]["children"] = _list_files(d, counter)
     base["projectNumberOfFiles"] = counter['file']
-    base["maxNumberOfFiles"] = counter['file'] + counter['dir']
+    # Weird file based limit. Ignore it.
+    # base["maxNumberOfFiles"] = counter['file'] + counter['dir']
 
     return base
 
 
-def get_file_content(path):
-    if os.path.exists(path) and os.path.isfile(path):
-        return "ok"
-    else:
-        return ""
-
 # API responses
+# ============
+# Basically function name are really important because I'm reflecting the ModelsClass to their models_class methods
+# automatically. See the "resp_map" lower for how it's done :D
+
 
 async def get_server_mode(body: GetServerMode):
+    # No idea if I have to change anything here
     return {
         'desktop': True,
         'externalEditorName': "Visual Studio Code",
@@ -225,27 +232,48 @@ async def get_server_mode(body: GetServerMode):
 
 
 async def get_project_files_hash(body: GetProjectFilesHash):
+    """
+    Poll for file changes. WatchFiles carry us with lightning fast async watch so I didn't experienced any de-sync while testing ...
+
+    Refence use go Hash function backed by sha1 and crc32. Since it's not really useful here, simply hash the timestamp
+    :param body:
+    :return:
+    """
     if settings.hash == '':
         data = get_mod_time(settings.project)
         settings.hash = hashlib.sha256(data.to_bytes(16, sys.byteorder)).hexdigest()[:32]
 
     return {
-        'hash': settings.hash  # TODO: find this ??
+        'hash': settings.hash
     }
 
 
 async def get_project_files(body: GetProjectFilesHash):
-    # with open("sample_projectfiles.json") as f:
-    #     obj = json.load(f)
+    """
+    Get a list of all files
+    :param body:
+    :return:
+    """
 
     return get_files_list(settings.project)
 
 
 async def get_new_version_available(body: GetNewVersionAvailable):
+    """
+    Checks for new release, ignore it for now !
+    :param body:
+    :return:
+    """
+    # TODO: implement some real updating
     return {'available': False}
 
 
 async def open_file_manager(body: OpenFileManager):
+    """
+    Open file or folder in explorer
+    :param body: OpenFileManager body request
+    :return:
+    """
     import subprocess
 
     path = os.path.normpath(os.path.join(os.path.dirname(settings.project), body.body.file))
@@ -260,6 +288,11 @@ async def open_file_manager(body: OpenFileManager):
 
 
 async def open_vscode(body: OpenVSCode):
+    """
+    Open the project in VSCode
+    :param body: OpenVSCode request
+    :return:
+    """
     import subprocess
 
     path = os.path.normpath(os.path.join(os.path.dirname(settings.project), body.body.location))
@@ -274,6 +307,11 @@ async def open_vscode(body: OpenVSCode):
 
 
 async def set_file_string(body: SetFileString):
+    """
+    Main method used to write into file
+    :param body: SetFileString model
+    :return: file modTime and size
+    """
     path = os.path.normpath(os.path.join(os.path.dirname(settings.project), body.body.path))
 
     if os.path.isfile(path):
@@ -285,8 +323,8 @@ async def set_file_string(body: SetFileString):
 
     if os.path.exists(path):
         return {
-             "modTime": get_mod_time(path),
-             "size": os.path.getsize(path)
+            "modTime": get_mod_time(path),
+            "size": os.path.getsize(path)
         }
     else:
         return {
@@ -322,7 +360,6 @@ async def create_folder(body: CreateFolder):
         return {
             'error': "Folder already exists"
         }
-
 
 
 async def delete_files(body: DeleteFiles):
@@ -373,40 +410,98 @@ async def move_files(body: MoveFiles):
 # Map response to method
 
 def snekify(name: str) -> str:
+    """
+    Convert CamelCase to python_case strings
+    :param name:
+    :return:
+    """
     return re.sub('(?!^)([A-Z]+)', r'_\1', name).lower()
 
+
+# Auto mapping MethodsName to methods_name functions.
+# Trick is to use globals() to get all functions and since they all extends APIRequest, use "_subclasses__()" to get
+# all and "snek_case_ify" them !
 resp_map = {
     i.__name__: globals()[snekify(i.__name__)] for i in APIRequest.__subclasses__() if snekify(i.__name__) in globals()
 }
 
+
+def custom_exception_handler(loop, context):
+    """
+    Custom handler used for async errors.
+    :param loop:
+    :param context:
+    :return:
+    """
+    loop.default_exception_handler(context)
+
+    exception = context.get('exception')
+    if isinstance(exception, ZeroDivisionError):
+        print(context)
+        loop.stop()
+
+
 async def watch_changes(settings: Settings):
-    async for changes in awatch(settings.project):
+    """
+    Change last update hash on file change in directory
+    :param settings:
+    :return:
+    """
+    try:
+        async for changes in awatch(settings.project):
+            data = int(time.time() * 1_000_000)
+            settings.hash = hashlib.sha256(data.to_bytes(16, sys.byteorder)).hexdigest()[:32]
 
-        data = int(time.time() * 1_000_000)
-        settings.hash = hashlib.sha256(data.to_bytes(16, sys.byteorder)).hexdigest()[:32]
-
+    except Exception as e:
+        # print(e)
+        # Hack: Error from https://github.com/PyO3/pyo3/issues/2525
+        pass
         # print(changes)
 
 
 def create_app(conf: Settings) -> FastAPI:
+    """
+    Like Flask's create_app, but async and cooler !
+    :param conf: global conf of the app, also used for hash passing
+    :return: app instance
+    """
     app = FastAPI()
 
     settings.project = conf.project
 
+    # Todo: auto-discover plugins
     # Editor static files
-    app.mount("/editor/app/plugins", StaticFiles(directory="editor/plugins", html=True), name="editor/plugins")
+    try:
+        app.mount("/editor/app/plugins", StaticFiles(directory="editor/plugins", html=True), name="editor/plugins")
+    except:
+        print(
+            "Can't locate \"editor\" folder or its \"plugins\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
+        sys.exit(1)
 
+    # TODO: migrate to on-the-fly generated HTML
     # Editor HTML template
-    templates = Jinja2Templates(directory="editor/static")
+    try:
+        templates = Jinja2Templates(directory="editor/static")
+    except:
+        print(
+            "Can't locate \"editor\" folder or its \"static\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
+        sys.exit(1)
 
     @app.get("/editor/", response_class=HTMLResponse)
     def get_editor(request: Request):
-        return templates.TemplateResponse("index.html", {"request": request})
+        # TODO: auto-generate page from plugins ?
+        try:
+            return templates.TemplateResponse("index.html", {"request": request})
+        except:
+            print(
+                "Can't locate \"editor\" folder or its \"static\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
+            return "Can't locate \"editor\" folder or its \"static\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle"
+
         # return {"Hello": "World"}
 
     @app.get("/")
     def read_root():
-        return "Just an api ! Go to /editor"
+        return RedirectResponse(url='/editor', status_code=303)
 
     # Actual API route here
 
@@ -431,11 +526,6 @@ def create_app(conf: Settings) -> FastAPI:
             }
 
     app.mount("/editor/project/", StaticFiles(directory=settings.project, html=True), name="project files")
-    # @app.api_route("/editor/project/{path_name:path}", methods=["GET"])
-    # async def catch_all(request: Request, path_name: str):
-    #     print(path_name)
-    #     a = get_file_content(os.path.join(settings.project, path_name))
-    #     return {"request_method": request.method, "path_name": path_name}
 
     @app.post("/editor/upload")
     async def create_upload_file(uploadTo: str = Form(), file: UploadFile | None = None):
@@ -469,11 +559,27 @@ def create_app(conf: Settings) -> FastAPI:
 if __name__ == '__main__':
     import uvicorn
 
+    # TODO: Scanning user home flags "~/.phasereditor2d/flags.txt"
+    # TODO: Reading project config  ==> phasereditor2d.config.json
+    # Don't: Reading license file at resources\app\server\PhaserEditor2D.lic and ~\.phasereditor2d\PhaserEditor2D.lic
+    # TODO: Program flags: [-port, 3355, -project, C:/Users/Phoebe/Downloads/test_phaser_sunny_land]
+    # TODO: User plugins: ~/.phasereditor2d/plugins
+    # Plugins are loaded by their "plugin.json" file
+    # Read package.json
+    # Read default-skip for file scanning
+    # Read each folder for ".skip" file
+
+    # TODO: Plugin: scanning and watch
+
     # args : -disable-open-browser -port 3354 -project C:/Users/Me/Documents/test_phaser_sunny_land
 
     parent_parser = argparse.ArgumentParser(add_help=True)
-    parent_parser.add_argument('-port', type=int, default=3355)
-    parent_parser.add_argument('-project', type=str, metavar='path', required=True)
+    parent_parser.add_argument('-port', type=int, default=3355, help='Server port (default 3355)')
+    parent_parser.add_argument('-project', type=str, metavar='path', required=True,
+                               help='Path to the project directory')
+    parent_parser.add_argument('-public', action='store_true', help='Allows remote connections')
+    parent_parser.add_argument('-dev', action='store_true', help='Enables developer features, with source map loading')
+    parent_parser.add_argument('-disable-open-browser', action='store_true', help='Don\'t launch the browser')
 
     args = parent_parser.parse_args()
 
@@ -483,17 +589,53 @@ if __name__ == '__main__':
 
     app = create_app(conf)
 
+    watch_task: Optional[Task] = None
+
 
     @app.on_event('startup')
     def init_watch():
+        global watch_task
+
         loop = asyncio.get_event_loop()
-        loop.create_task(watch_changes(settings))
+        loop.set_exception_handler(custom_exception_handler)
+        watch_task = loop.create_task(watch_changes(settings))
         # print("hooked :D")
+
+        host = 'localhost'
+        if args.public:
+            host = "0.0.0.0"
+            import socket
+            try:
+                host = socket.gethostbyname(socket.gethostname())
+            except:
+                pass
+
+        print(f"""
+  PhaserEditor2D v0.0.1 server running from:
+
+  ▲ Project: {args.project}
+  ▲ Local  : http://{host}:{args.port}/editor
+""")
+        if not args.disable_open_browser:
+            webbrowser.open_new_tab(f'http://localhost:{args.port}/editor')
+
+
+    @app.on_event('shutdown')
+    def exit_watch():
+        global watch_task
+
+        print("exiting...")
+        if watch_task:
+            watch_task.cancel()
+
 
     # asyncio.create_task(watch_changes(settings.project))
 
     uvicorn.run(
         app,
-        port=args.port or 3355
+        port=args.port or 3355,
+        host='0.0.0.0' if args.public else 'localhost',
+        log_config=None
     )
+
     # uvicorn.run('main:create_app', port=3355, reload=True)
