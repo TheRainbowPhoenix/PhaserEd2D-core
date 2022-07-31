@@ -6,6 +6,7 @@ How cool is that ?
 Need Pyton 3.10+, fastapi, jinja2 & uvicorn
 """
 import argparse
+import glob
 import re
 import shutil
 import sys
@@ -20,19 +21,26 @@ import hashlib
 import asyncio
 import webbrowser
 
+import typing
 from fastapi import FastAPI, Request, UploadFile, Form
-from fastapi.templating import Jinja2Templates
-from starlette.responses import HTMLResponse, RedirectResponse
-from starlette.staticfiles import StaticFiles
+# from fastapi.templating import Jinja2Templates
+from starlette.datastructures import Headers
+from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.staticfiles import StaticFiles, PathLike
 
 from pydantic import BaseModel, BaseSettings
 from pydantic.typing import Literal
+from starlette.types import Scope, Receive, Send
 from watchfiles import awatch
 
 
 class Settings(BaseSettings):
     project: pathlib.Path | None = None
     hash: str = ''
+    max_number_files: int = 1000
+    disable_colors: bool = False
+    editor: pathlib.Path | None = None
+    extra_plugins_dir: List[str] = []
 
 
 # Simple setting base, used for shared config and hash passing
@@ -211,7 +219,7 @@ def get_files_list(d):
     base["rootFile"]["children"] = _list_files(d, counter)
     base["projectNumberOfFiles"] = counter['file']
     # Weird file based limit. Ignore it.
-    # base["maxNumberOfFiles"] = counter['file'] + counter['dir']
+    base["maxNumberOfFiles"] = settings.max_number_files
 
     return base
 
@@ -426,6 +434,53 @@ resp_map = {
 }
 
 
+def discover_plugins(plugin_dir: str = "editor/plugins") -> (Dict[int, List[str]], Dict[str, Dict[str, List[str]]]):
+    """
+    Attempt to discover all plugins files
+    :param plugin_dir: default plugins directory
+    :return: (plugins_order, plugins_map)
+    """
+    plugins_order = {}
+    plugins_map = {}
+
+    all_dirs = settings.extra_plugins_dir
+    all_dirs.append(plugin_dir)
+
+    for directory in all_dirs:
+        if os.path.isdir(directory):
+            for plugin in glob.glob(os.path.join(directory, '*/plugin.json')):
+                path = os.path.normpath(plugin)
+                try:
+                    with open(path, encoding='utf-8') as f:
+                        data = json.load(f)
+                        id = data["id"]
+                        priority: int = data.get("priority", 0)
+                        styles: list = data.get("styles", [])
+                        scripts: list = data.get("scripts", [])
+
+                        if id in plugins_map:
+                            print(f"[i] Plugin already loaded : {id}")
+                            continue
+
+                        # Creating plugin struct
+                        plugins_map[id] = {
+                            'styles': styles,
+                            'scripts': scripts
+                        }
+
+                        # Adding plugin to priority queue
+                        if not priority in plugins_order:
+                            plugins_order[priority] = []
+
+                        plugins_order[priority].append(id)
+
+                except Exception as e:
+                    print(f"[!] Bad plugin : {path}")
+                    print(e)
+
+    return plugins_order, plugins_map
+
+
 def custom_exception_handler(loop, context):
     """
     Custom handler used for async errors.
@@ -459,6 +514,36 @@ async def watch_changes(settings: Settings):
         # print(changes)
 
 
+# simple wait to avoid XSS and XML injection
+_ALLOWED_ID_CHARS = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$%()*+-.:/;=@[]^_{|}~'
+
+
+def safe(val: str) -> str:
+    return "".join(i for i in val if i in _ALLOWED_ID_CHARS)
+
+
+class MagicPluginsRoute:
+    def __init__(
+            self,
+            directory: typing.Optional[PathLike] = None,
+    ) -> None:
+        self.static = StaticFiles(directory=directory, html=True)
+
+        for directory in settings.extra_plugins_dir:
+            plugin_directory = os.path.normpath(directory)
+            assert os.path.isdir(
+                plugin_directory
+            ), f"Directory '{directory!r}' could not be found."
+            if plugin_directory not in self.static.all_directories:
+                self.static.all_directories.append(plugin_directory)
+
+        self.config_checked = False
+
+    # Every calls to URL hit here ...
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.static(scope, receive, send)
+
+
 def create_app(conf: Settings) -> FastAPI:
     """
     Like Flask's create_app, but async and cooler !
@@ -468,36 +553,83 @@ def create_app(conf: Settings) -> FastAPI:
     app = FastAPI()
 
     settings.project = conf.project
+    settings.editor = conf.editor
+    settings.disable_colors = conf.disable_colors
+    settings.max_number_files = conf.max_number_files
+    settings.extra_plugins_dir = conf.extra_plugins_dir
 
-    # Todo: auto-discover plugins
-    # Editor static files
+    if settings.editor != None:
+        if os.path.isdir(settings.editor):
+            plugin_dir = os.path.normpath(settings.editor)
+        else:
+            print(f"[!] Invalid folder provided to \"-editor\" argument : \"{settings.editor}\" does not exists.")
+            sys.exit(1)
+    else:
+        plugin_dir = "editor/plugins"
+        if not os.path.isdir(plugin_dir):
+            print(
+                "Can't locate \"editor\" folder or its \"plugins\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
+            sys.exit(1)
+
+    plugins_order, plugins_map = discover_plugins(plugin_dir)
+
+    # TODO: support for multiple sources plugins
     try:
-        app.mount("/editor/app/plugins", StaticFiles(directory="editor/plugins", html=True), name="editor/plugins")
+        app.mount("/editor/app/plugins", MagicPluginsRoute(directory=plugin_dir), name="plugins")
     except:
         print(
             "Can't locate \"editor\" folder or its \"plugins\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
         sys.exit(1)
 
-    # TODO: migrate to on-the-fly generated HTML
-    # Editor HTML template
-    try:
-        templates = Jinja2Templates(directory="editor/static")
-    except:
-        print(
-            "Can't locate \"editor\" folder or its \"static\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
-        sys.exit(1)
-
     @app.get("/editor/", response_class=HTMLResponse)
-    def get_editor(request: Request):
-        # TODO: auto-generate page from plugins ?
-        try:
-            return templates.TemplateResponse("index.html", {"request": request})
-        except:
-            print(
-                "Can't locate \"editor\" folder or its \"static\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
-            return "Can't locate \"editor\" folder or its \"static\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle"
+    def get_editor(request: Request, plugins_order=plugins_order, plugins_map=plugins_map):
 
-        # return {"Hello": "World"}
+        body = f"""<!DOCTYPE html>\n<html lang="en">\n<head>\n
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Phaser Editor 2D</title>
+"""
+        styles = ""
+        scripts = ""
+
+        for _, ids in sorted(plugins_order.items()):
+            for id in ids:
+                if id in plugins_map:
+                    styles += f"""\n	<!-- plugin:{safe(id)} -->\n"""
+                    plugin = plugins_map[id]
+
+                    for style in plugin.get("styles", []):
+                        styles += f'	<link href="app/plugins/{safe(id)}/{safe(style)}?v={int(time.time())}" rel="stylesheet">\n'
+
+                    scripts += f"""\n	<!-- plugin:{safe(id)} -->\n"""
+                    for style in plugin.get("scripts", []):
+                        scripts += f'	<script src="app/plugins/{safe(id)}/{safe(style)}?v={int(time.time())}"></script>\n'
+
+        body += styles
+
+        body += "</head>\n<body>"
+
+        if len(scripts) < 1:
+            # failsafe message
+            scripts += "<h1>Nothing's loading ?</h1>\n" \
+                       "<p>Looks like no plugins are loaded. Please <a href=\"https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/FAQ\">refer to help pages</a></p>"
+
+        body += scripts
+
+        body += f"""<!--
+      ┌───────╖ 
+      │  ╓─_  ╟─╮
+      │  ╠════╝ │
+      ╘╤═╝ ┌────╯
+       ╰───╯
+        
+    Phaser Editor  
+-->\n"""
+
+        body += "</body>\n</html>"
+
+        return body
 
     @app.get("/")
     def read_root():
@@ -556,6 +688,44 @@ def create_app(conf: Settings) -> FastAPI:
     return app
 
 
+def print_welcome(args):
+    """
+    Print "welcome" console message + user friendliness
+    :param args:
+    :return:
+    """
+    host = 'localhost'
+    if args.public:
+        host = "0.0.0.0"
+        import socket
+        try:
+            host = socket.gethostbyname(socket.gethostname())
+        except:
+            pass
+
+    if os.name == 'nt' and not args.disable_colors:
+        from ctypes import windll
+        STD_OUTPUT_HANDLE = -11
+        stdout_handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+
+        print("")
+        print("PhaserEditor2D v0.0.1 server running from:")
+        print("")
+        windll.kernel32.SetConsoleTextAttribute(stdout_handle, 9)
+        print(f" ▲ Project : {args.project}")
+        print(f" ▲ Local   : http://{host}:{args.port}/editor")
+        windll.kernel32.SetConsoleTextAttribute(stdout_handle, 15)
+        print("")
+
+    else:
+        print(f"""
+  PhaserEditor2D v0.0.1 server running from:
+
+  > Project : {args.project}
+  > Local   : http://{host}:{args.port}/editor
+""")
+
+
 if __name__ == '__main__':
     import uvicorn
 
@@ -578,13 +748,27 @@ if __name__ == '__main__':
     parent_parser.add_argument('-project', type=str, metavar='path', required=True,
                                help='Path to the project directory')
     parent_parser.add_argument('-public', action='store_true', help='Allows remote connections')
+    parent_parser.add_argument('-max-number-files', type=int, default=1000,
+                               help='Maximum number files per project (default 1000)')
     parent_parser.add_argument('-dev', action='store_true', help='Enables developer features, with source map loading')
     parent_parser.add_argument('-disable-open-browser', action='store_true', help='Don\'t launch the browser')
+    parent_parser.add_argument('-disable-colors', action='store_true', help='Don\'t print cool colors on console')
+    parent_parser.add_argument('-editor', type=str, metavar='path', default='editor/plugins',
+                               help='Path to the \'editor\' directory (default to current directory)')
 
     args = parent_parser.parse_args()
 
+    extra_plugins_dir = []
+    global_plugins_dir = os.path.join(pathlib.Path.home(), ".phasereditor2d", 'plugins')
+    if os.path.isdir(global_plugins_dir):
+        extra_plugins_dir.append(global_plugins_dir)
+
     conf = Settings(
-        project=pathlib.Path(args.project)
+        project=pathlib.Path(args.project),
+        max_number_files=args.max_number_files,
+        disable_colors=args.disable_colors,
+        editor=args.editor,
+        extra_plugins_dir=extra_plugins_dir
     )
 
     app = create_app(conf)
@@ -601,21 +785,8 @@ if __name__ == '__main__':
         watch_task = loop.create_task(watch_changes(settings))
         # print("hooked :D")
 
-        host = 'localhost'
-        if args.public:
-            host = "0.0.0.0"
-            import socket
-            try:
-                host = socket.gethostbyname(socket.gethostname())
-            except:
-                pass
+        print_welcome(args)
 
-        print(f"""
-  PhaserEditor2D v0.0.1 server running from:
-
-  ▲ Project: {args.project}
-  ▲ Local  : http://{host}:{args.port}/editor
-""")
         if not args.disable_open_browser:
             webbrowser.open_new_tab(f'http://localhost:{args.port}/editor')
 
