@@ -4,6 +4,8 @@ Trying to be as compatible as possible ...
 
 How cool is that ?
 Need Pyton 3.10+, fastapi, jinja2 & uvicorn
+
+example args : -disable-open-browser -port 3354 -project C:/Users/Me/Documents/test_phaser_sunny_land
 """
 import argparse
 import glob
@@ -809,7 +811,7 @@ def print_info(message: str):
         print(f" · {message}")
         windll.kernel32.SetConsoleTextAttribute(stdout_handle, 15)
     else:
-        print(f"\n [i] {message} \n")
+        print(f" [i] {message}")
 
 
 def print_welcome(conf: Settings, port: int):
@@ -926,21 +928,6 @@ def reload_plugins():
 if __name__ == '__main__':
     import uvicorn
 
-    # TODO: Scanning user home flags "~/.phasereditor2d/flags.txt"
-
-    default_skip = load_default_skip()
-
-    # Don't: Reading license file at resources\app\server\PhaserEditor2D.lic and ~\.phasereditor2d\PhaserEditor2D.lic
-    # TODO: User plugins: ~/.phasereditor2d/plugins
-    # Plugins are loaded by their "plugin.json" file
-    # Read package.json
-    # Read default-skip for file scanning
-    # Read each folder for ".skip" file
-
-    # TODO: Plugin: scanning and watch
-
-    # args : -disable-open-browser -port 3354 -project C:/Users/Me/Documents/test_phaser_sunny_land
-
     parent_parser = argparse.ArgumentParser(add_help=True)
     parent_parser.add_argument('-port', type=int, default=3355, help='Server port (default 3355)')
     parent_parser.add_argument('-project', type=str, metavar='path', required=True,
@@ -958,13 +945,22 @@ if __name__ == '__main__':
 
     args = parent_parser.parse_args()
 
+    settings.disable_colors = args.disable_colors
+
+    # TODO: Scanning user home flags "~/.phasereditor2d/flags.txt"
+
+    default_skip = load_default_skip()
+
+    # TODO: Plugin: scanning and watch
     extra_plugins_dir = []
 
-    disable_gzip = args.disable_gzip
-    dev = args.dev
-    public = args.public or False
+    # overwrite order : Cli > settings > default conf
+    disable_gzip = args.disable_gzip or settings.disable_gzip or False
+    dev = args.dev or settings.dev or False
+    public = args.public or settings.pub or False
 
-    port = args.port or 3355
+    max_number_files = args.max_number_files or settings.max_number_files or 1000
+    port = args.port or settings.port or 3355
 
     # load_project_config()
 
@@ -976,7 +972,7 @@ if __name__ == '__main__':
 
     conf = Settings(
         project=pathlib.Path(args.project),
-        max_number_files=args.max_number_files,
+        max_number_files=max_number_files,
         disable_colors=args.disable_colors,
         editor=args.editor,
         extra_plugins_dir=extra_plugins_dir,
@@ -1017,14 +1013,9 @@ if __name__ == '__main__':
         if watch_task:
             watch_task.cancel()
 
-
-    # asyncio.create_task(watch_changes(settings.project))
-
     uvicorn.run(
         app,
         port=port,
         host='0.0.0.0' if public else 'localhost',
         log_config=None
     )
-
-    # uvicorn.run('main:create_app', port=3355, reload=True)

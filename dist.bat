@@ -1,1 +1,1 @@
-venv\Scripts\pyinstaller.exe main.py  -c -F --name=PhaserEditor2D --icon=docs\icon.ico
+venv\Scripts\pyinstaller.exe main.py  -c -F --name=PhaserEditor2D --icon=docs\icon.ico --version-file dist\file_version_info.txt
