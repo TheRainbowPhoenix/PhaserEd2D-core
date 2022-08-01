@@ -7,7 +7,6 @@ Need Pyton 3.10+, fastapi, jinja2 & uvicorn
 """
 import argparse
 import glob
-import gzip
 import re
 import shutil
 import sys
@@ -15,7 +14,7 @@ import time
 import json
 from asyncio import Task
 from collections import defaultdict
-from typing import Union, Dict, List, Awaitable, Optional
+from typing import Union, Dict, List, Optional
 import os
 import pathlib
 import hashlib
@@ -24,16 +23,13 @@ import webbrowser
 
 import typing
 from fastapi import FastAPI, Request, UploadFile, Form
-# from fastapi.templating import Jinja2Templates
-from starlette.datastructures import Headers
-from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, RedirectResponse
 from starlette.staticfiles import StaticFiles, PathLike
 
 from pydantic import BaseModel, BaseSettings
 from pydantic.typing import Literal
-from starlette.types import Scope, Receive, Send, Message
+from starlette.types import Scope, Receive, Send
 from watchfiles import awatch
 
 
@@ -41,6 +37,7 @@ class Settings(BaseSettings):
     project: pathlib.Path | None = None
     hash: str = ''
     max_number_files: int = 1000
+    port: int = 3355
     disable_colors: bool = False
     disable_gzip: bool = False
     dev: bool = False
@@ -49,6 +46,9 @@ class Settings(BaseSettings):
     extra_plugins: List[str] = []
     extra_plugins_dir: List[str] = []
     skip_dir: List[str] = []
+    filter_rules: List[str] = []
+    plugins_order: Dict[int, List[str]] = {}
+    plugins_map: Dict[str, Dict[str, List[str]]] = {}
 
 
 # Simple setting base, used for shared config and hash passing
@@ -167,16 +167,20 @@ def get_mod_time(path) -> int:
     return int(os.path.getmtime(path) * 1000000000)
 
 
-def file_filtered(file) -> bool:
+def file_filtered(file, rules=[]) -> bool:
     """
     CHeck if file or folder is ignored
     :param file: file string name
     :return: boolean
     """
-    return os.path.basename(file).startswith('.') or os.path.join(settings.project, file) in settings.skip_dir
+
+    return (
+        any([pathlib.PurePath(file).match(i) for i in rules]) or
+        os.path.join(settings.project, file) in settings.skip_dir
+    )
 
 
-def _list_files(start_path, counters: Dict[str, int]):
+def _list_files(start_path, counters: Dict[str, int], filter_rules=[]):
     """
     List all file to the JSON format expected
     :param start_path: string path
@@ -185,12 +189,25 @@ def _list_files(start_path, counters: Dict[str, int]):
     """
 
     items = []
-    for element in sorted(os.listdir(start_path)):
-        if os.path.isfile(os.path.join(start_path, '.skip')):
-            # TODO: can't understand the documentation properly about this
-            continue
+    rules = filter_rules
+    if os.path.isfile(os.path.join(start_path, '.skip')):
+        try:
+            with open(os.path.join(start_path, '.skip')) as f:
+                skip_rules = read_skip_file(f)
 
-        if file_filtered(os.path.join(start_path, element)):
+            if skip_rules is []:
+                # If the .skip file is empty, then the editor assumes it has a * pattern.
+                # It means, it will exclude all the folder’s content. We did it that way for backward compatibility
+                # with previous versions of the editor.
+                return
+        except:
+            skip_rules = []
+
+        rules = list(set(rules + skip_rules))
+
+    for element in sorted(os.listdir(start_path)):
+
+        if file_filtered(os.path.join(start_path, element), rules=rules):
             continue
 
         path = os.path.join(start_path, element)
@@ -205,7 +222,7 @@ def _list_files(start_path, counters: Dict[str, int]):
             counters['file'] += 1
         if os.path.isdir(path):
             counters['dir'] += 1
-            item["children"] = _list_files(path, counters)
+            item["children"] = _list_files(path, counters, filter_rules)
 
         items.append(item)
 
@@ -227,7 +244,7 @@ def get_files_list(d):
         }, "maxNumberOfFiles": 0, "projectNumberOfFiles": 0, "hash": settings.hash}
 
     counter = {'file': 0, 'dir': 0}
-    base["rootFile"]["children"] = _list_files(d, counter)
+    base["rootFile"]["children"] = _list_files(d, counter, settings.filter_rules)
     base["projectNumberOfFiles"] = counter['file']
     # Weird file based limit. Ignore it.
     base["maxNumberOfFiles"] = settings.max_number_files
@@ -347,16 +364,19 @@ async def set_file_string(body: SetFileString):
     """
     path = os.path.normpath(os.path.join(os.path.dirname(settings.project), body.body.path))
 
+    # Looks like starlette serve files with carriage return conversion, so undo it here :D
+    content = body.body.content.replace('\r\r', '\r').replace('\r\n', '\n')
     if os.path.isfile(path):
         with open(path, 'w+', encoding='utf-8') as f:
-            f.write(body.body.content)
+            f.write(content)
     elif not os.path.isdir(path):
         with open(path, 'w+', encoding='utf-8') as f:
-            f.write(body.body.content)
+            f.write(content)
 
     if os.path.exists(path):
+        # os.utime(path, (time.time(), time.time()))
         return {
-            "modTime": get_mod_time(path),
+            "modTime": time.time(),
             "size": os.path.getsize(path)
         }
     else:
@@ -469,7 +489,8 @@ def discover_plugins(plugin_dir: str = "editor/plugins") -> (Dict[int, List[str]
     plugins_map = {}
 
     all_dirs = settings.extra_plugins_dir
-    all_dirs.append(plugin_dir)
+    if not os.path.normpath(plugin_dir) in all_dirs:
+        all_dirs.append(os.path.normpath(plugin_dir))
 
     for plugin in sum(
             [glob.glob(os.path.join(i, 'plugin.json')) for i in settings.extra_plugins if os.path.isdir(i)] +
@@ -542,6 +563,13 @@ async def watch_changes(settings: Settings):
             data = int(time.time() * 1_000_000)
             settings.hash = hashlib.sha256(data.to_bytes(16, sys.byteorder)).hexdigest()[:32]
 
+            for change in changes:
+                change_type, filename = change
+                if filename == os.path.abspath(os.path.join(settings.project, 'phasereditor2d.config.json')):
+                    print_info("Reloading \"phasereditor2d.config.json\" ...")
+                    load_project_config(settings)
+                    reload_plugins()
+
     except Exception as e:
         # print(e)
         # Hack: Error from https://github.com/PyO3/pyo3/issues/2525
@@ -593,15 +621,6 @@ def create_app(conf: Settings) -> FastAPI:
     global settings
 
     settings = conf
-    # settings.project = conf.project
-    # settings.editor = conf.editor
-    # settings.disable_colors = conf.disable_colors
-    # settings.disable_gzip = conf.disable_gzip
-    # settings.dev = conf.dev
-    # settings.max_number_files = conf.max_number_files
-    # settings.extra_plugins_dir = conf.extra_plugins_dir
-    # settings.extra_plugins = conf.extra_plugins
-    # settings.skip_dir = conf.skip_dir
 
     if not settings.disable_gzip:
         app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -618,8 +637,9 @@ def create_app(conf: Settings) -> FastAPI:
             print_error(
                 "Can't locate \"editor\" folder or its \"plugins\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
             sys.exit(1)
+        settings.editor = "editor/plugins"
 
-    plugins_order, plugins_map = discover_plugins(plugin_dir)
+    settings.plugins_order, settings.plugins_map = discover_plugins(plugin_dir)
 
     # TODO: support for multiple sources plugins
     try:
@@ -630,7 +650,7 @@ def create_app(conf: Settings) -> FastAPI:
         sys.exit(1)
 
     @app.get("/editor/", response_class=HTMLResponse)
-    def get_editor(request: Request, plugins_order=plugins_order, plugins_map=plugins_map):
+    def get_editor(request: Request):
 
         body = f"""<!DOCTYPE html>\n<html lang="en">\n<head>\n
     <meta charset="UTF-8">
@@ -641,11 +661,11 @@ def create_app(conf: Settings) -> FastAPI:
         styles = ""
         scripts = ""
 
-        for _, ids in sorted(plugins_order.items()):
+        for _, ids in sorted(settings.plugins_order.items()):
             for id in ids:
-                if id in plugins_map:
+                if id in settings.plugins_map:
                     styles += f"""\n	<!-- plugin:{safe(id)} -->\n"""
-                    plugin = plugins_map[id]
+                    plugin = settings.plugins_map[id]
 
                     key = "styles-dev" if settings.dev and "styles-dev" in plugin else "styles"
                     for style in plugin.get(key, []):
@@ -748,6 +768,10 @@ def create_app(conf: Settings) -> FastAPI:
     return app
 
 
+def read_skip_file(f) -> list:
+    return [l.strip() for l in f.readlines() if (not l.strip().startswith('#') and len(l.strip()) > 0)]
+
+
 def print_error(message: str):
     """
     Prints an "error" on the console
@@ -812,7 +836,6 @@ def print_welcome(conf: Settings, port: int):
         STD_OUTPUT_HANDLE = -11
         stdout_handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
 
-
         windll.kernel32.SetConsoleTextAttribute(stdout_handle, 9)
         print(f" ● Project : {conf.project}")
         print(f" ■ Local   : http://localhost:{port}/editor")
@@ -829,13 +852,85 @@ def print_welcome(conf: Settings, port: int):
 
     print("")
 
+
+# File loading
+def load_default_skip() -> list:
+    if os.path.isfile("default-skip"):
+        with open("default-skip", "r") as f:
+            default_skip = read_skip_file(f)
+    else:
+        default_skip = []
+    return default_skip
+
+
+def load_project_config(conf: Settings):
+    project_file = os.path.join(args.project, "phasereditor2d.config.json")
+    if os.path.isfile(project_file):
+        with open(project_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+            # Ignore directories
+            if 'skip' in data:
+                conf.skip_dir = []
+
+                project_skips = data.get('skip', [])
+                for skip in project_skips:
+                    path = os.path.normpath(os.path.join(args.project, skip))
+                    if os.path.isdir(path):
+                        conf.skip_dir.append(path)
+
+            # Extra plugins to load
+            if 'plugins' in data:
+                conf.extra_plugins = []
+
+                project_plugins = data.get('plugins', [])
+                for plugin_rel in project_plugins:
+                    plugin_path = os.path.normpath(os.path.join(args.project, plugin_rel))
+                    if os.path.isdir(plugin_path):
+                        if not plugin_path in conf.extra_plugins:
+                            conf.extra_plugins.append(plugin_path)
+
+                            print_info(f"Loading editor plugin : \"{os.path.basename(plugin_rel)}\"")
+
+            # Launch flags
+            if 'flags' in data:
+                flags = data.get('flags', [])
+
+                if len(flags) > 0:
+                    print_info(f"Using custom flags : {repr(flags)[:60]}")
+
+                if '-port' in flags:
+                    # Note: won't change in prod ...
+                    port_pos = flags.index('-port')
+                    if len(flags) > port_pos + 1:
+                        try:
+                            _port = int(flags[port_pos + 1])
+                            if 1024 < _port < 65535:
+                                conf.port = _port
+                        except:
+                            print_error(f"Invalid port number supplied : \"{flags[port_pos + 1]}\"")
+
+                conf.disable_gzip = '-disable-gzip' in flags
+                conf.dev = '-dev' in flags
+                conf.pub = '-public' in flags
+
+            if 'playUrl' in data:
+                pass
+
+
+def reload_plugins():
+    settings.plugins_order = {}
+    settings.plugins_map = {}
+    settings.plugins_order, settings.plugins_map = discover_plugins(settings.editor)
+
 if __name__ == '__main__':
     import uvicorn
 
     # TODO: Scanning user home flags "~/.phasereditor2d/flags.txt"
-    # TODO: Reading project config  ==> phasereditor2d.config.json
+
+    default_skip = load_default_skip()
+
     # Don't: Reading license file at resources\app\server\PhaserEditor2D.lic and ~\.phasereditor2d\PhaserEditor2D.lic
-    # TODO: Program flags: [-port, 3355, -project, C:/Users/Phoebe/Downloads/test_phaser_sunny_land]
     # TODO: User plugins: ~/.phasereditor2d/plugins
     # Plugins are loaded by their "plugin.json" file
     # Read package.json
@@ -856,15 +951,14 @@ if __name__ == '__main__':
     parent_parser.add_argument('-dev', action='store_true', help='Enables developer features, with source map loading')
     parent_parser.add_argument('-disable-open-browser', action='store_true', help='Don\'t launch the browser')
     parent_parser.add_argument('-disable-colors', action='store_true', help='Don\'t print cool colors on console')
-    parent_parser.add_argument('-disable-gzip', action='store_true', help='Disable Gzip compression of large HTTP responses')
+    parent_parser.add_argument('-disable-gzip', action='store_true',
+                               help='Disable Gzip compression of large HTTP responses')
     parent_parser.add_argument('-editor', type=str, metavar='path', default='editor/plugins',
                                help='Path to the \'editor\' directory (default to current directory)')
 
     args = parent_parser.parse_args()
 
     extra_plugins_dir = []
-    extra_plugins = []
-    skip_dir = []
 
     disable_gzip = args.disable_gzip
     dev = args.dev
@@ -872,55 +966,9 @@ if __name__ == '__main__':
 
     port = args.port or 3355
 
-    project_file = os.path.join(args.project, "phasereditor2d.config.json")
-    if os.path.isfile(project_file):
-        with open(project_file, encoding="utf-8") as f:
-            data = json.load(f)
+    # load_project_config()
 
-            # Ignore directories
-            if 'skip' in data:
-                project_skips = data.get('skip', [])
-                for skip in project_skips:
-                    path = os.path.normpath(os.path.join(args.project, skip))
-                    if os.path.isdir(path):
-                        skip_dir.append(path)
-
-            # Extra plugins to load
-            if 'plugins' in data:
-                project_plugins = data.get('plugins', [])
-                for plugin_rel in project_plugins:
-                    plugin_path = os.path.normpath(os.path.join(args.project, plugin_rel))
-                    if os.path.isdir(plugin_path):
-                        extra_plugins.append(plugin_path)
-
-                        print_info(f"Loading editor plugin : \"{os.path.basename(plugin_rel)}\"")
-
-            # Launch flags
-            if 'flags' in data:
-                flags = data.get('flags', [])
-
-                if len(flags) > 0:
-                    print_info(f"Using custom flags : {repr(flags)[:60]}")
-
-                if '-port' in flags:
-                    port_pos = flags.index('-port')
-                    if len(flags) > port_pos +1:
-                        try:
-                            _port = int(flags[port_pos +1])
-                            if 1024 < _port < 65535:
-                                port = _port
-                        except:
-                            print_error(f"Invalid port number supplied : \"{flags[port_pos +1]}\"")
-
-                if '-disable-gzip' in flags:
-                    disable_gzip = True
-                if '-dev' in flags:
-                    dev = True
-                if '-public' in flags:
-                    public = True
-
-            if 'playUrl' in data:
-                pass
+    # Reading project config  ==> phasereditor2d.config.json
 
     global_plugins_dir = os.path.join(pathlib.Path.home(), ".phasereditor2d", 'plugins')
     if os.path.isdir(global_plugins_dir):
@@ -932,16 +980,20 @@ if __name__ == '__main__':
         disable_colors=args.disable_colors,
         editor=args.editor,
         extra_plugins_dir=extra_plugins_dir,
-        extra_plugins=extra_plugins,
-        skip_dir=skip_dir,
+        extra_plugins=[],
+        skip_dir=[],
         disable_gzip=disable_gzip,
         dev=dev,
         pub=public,
+        filter_rules=default_skip,
     )
+
+    load_project_config(conf)
 
     app = create_app(conf)
 
     watch_task: Optional[Task] = None
+
 
     @app.on_event('startup')
     def init_watch():
