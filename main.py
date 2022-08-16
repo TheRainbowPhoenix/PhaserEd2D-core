@@ -1,3 +1,5 @@
+# coding: utf8
+
 """
 Phaser Ed 2D core server ptyhon single-file !
 Trying to be as compatible as possible ...
@@ -36,6 +38,7 @@ from watchfiles import awatch
 
 
 class Settings(BaseSettings):
+    application_path: pathlib.Path = pathlib.Path(os.getcwd())
     project: pathlib.Path | None = None
     hash: str = ''
     max_number_files: int = 1000
@@ -56,6 +59,9 @@ class Settings(BaseSettings):
 # Simple setting base, used for shared config and hash passing
 settings = Settings()
 
+
+# Errors buffer for debugging
+error_buffer = []
 
 # API models here - Recreated from AJAX calls
 
@@ -632,14 +638,16 @@ def create_app(conf: Settings) -> FastAPI:
             plugin_dir = os.path.normpath(settings.editor)
         else:
             print_error(f"Invalid folder provided to \"-editor\" argument : \"{settings.editor}\" does not exists.")
-            sys.exit(1)
+            raise RuntimeError()
+            # sys.exit(1)
     else:
-        plugin_dir = "editor/plugins"
+        plugin_dir = os.path.join(settings.application_path, 'editor', 'plugins')
         if not os.path.isdir(plugin_dir):
             print_error(
                 "Can't locate \"editor\" folder or its \"plugins\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
-            sys.exit(1)
-        settings.editor = "editor/plugins"
+            raise RuntimeError()
+            # sys.exit(1)
+        settings.editor = os.path.join(settings.application_path, 'editor', 'plugins')
 
     settings.plugins_order, settings.plugins_map = discover_plugins(plugin_dir)
 
@@ -649,7 +657,8 @@ def create_app(conf: Settings) -> FastAPI:
     except:
         print_error(
             "Can't locate \"editor\" folder or its \"plugins\" subdirectory. Please refer to https://github.com/TheRainbowPhoenix/PhaserEd2D-core/wiki/Using-the-bundle")
-        sys.exit(1)
+        raise RuntimeError()
+        # sys.exit(1)
 
     @app.get("/editor/", response_class=HTMLResponse)
     def get_editor(request: Request):
@@ -781,18 +790,23 @@ def print_error(message: str):
     :param message: error message
     :return:
     """
-    if os.name == 'nt' and not settings.disable_colors:
-        from ctypes import windll
-        STD_OUTPUT_HANDLE = -11
-        stdout_handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+    error_buffer.append(f"\n [!] {message} \r\n")
+    if os.name == 'nt' and not settings.disable_colors and 'PROMPT' in os.environ:
+        try:
+            from ctypes import windll
+            STD_OUTPUT_HANDLE = -11
+            stdout_handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
 
-        print("")
-        windll.kernel32.SetConsoleTextAttribute(stdout_handle, 4)
-        print(f" ▲ {message}")
-        windll.kernel32.SetConsoleTextAttribute(stdout_handle, 15)
-        print("")
-    else:
-        print(f"\n [!] {message} \n")
+            print("")
+            windll.kernel32.SetConsoleTextAttribute(stdout_handle, 4)
+            print(f" ▲ {message}")
+            windll.kernel32.SetConsoleTextAttribute(stdout_handle, 15)
+            print("")
+            return
+        except:
+            pass
+
+    print(f"\n [!] {message} \n")
 
 
 def print_info(message: str):
@@ -802,16 +816,21 @@ def print_info(message: str):
     :param message: info message
     :return:
     """
-    if os.name == 'nt' and not settings.disable_colors:
-        from ctypes import windll
-        STD_OUTPUT_HANDLE = -11
-        stdout_handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+    error_buffer.append(f"\n [i] {message} \r\n")
+    if os.name == 'nt' and not settings.disable_colors and 'PROMPT' in os.environ:
+        try:
+            from ctypes import windll
+            STD_OUTPUT_HANDLE = -11
+            stdout_handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
 
-        windll.kernel32.SetConsoleTextAttribute(stdout_handle, 11)
-        print(f" · {message}")
-        windll.kernel32.SetConsoleTextAttribute(stdout_handle, 15)
-    else:
-        print(f" [i] {message}")
+            windll.kernel32.SetConsoleTextAttribute(stdout_handle, 11)
+            print(f" · {message}")
+            windll.kernel32.SetConsoleTextAttribute(stdout_handle, 15)
+            return
+        except:
+            pass
+
+    print(f" [i] {message}")
 
 
 def print_welcome(conf: Settings, port: int):
@@ -834,23 +853,29 @@ def print_welcome(conf: Settings, port: int):
     print("")
 
     if os.name == 'nt' and not conf.disable_colors:
-        from ctypes import windll
-        STD_OUTPUT_HANDLE = -11
-        stdout_handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
+        try:
+            from ctypes import windll
+            STD_OUTPUT_HANDLE = -11
+            stdout_handle = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
 
-        windll.kernel32.SetConsoleTextAttribute(stdout_handle, 9)
-        print(f" ● Project : {conf.project}")
-        print(f" ■ Local   : http://localhost:{port}/editor")
-        if settings.pub:
-            print(f" ▶ PlayLan : http://{host}:{port}/editor/external")
-        windll.kernel32.SetConsoleTextAttribute(stdout_handle, 15)
+            windll.kernel32.SetConsoleTextAttribute(stdout_handle, 9)
+            print(f" ● Project : {conf.project}")
+            print(f" ■ Local   : http://localhost:{port}/editor")
+            if settings.pub:
+                print(f" ▶ PlayLan : http://{host}:{port}/editor/external")
+            windll.kernel32.SetConsoleTextAttribute(stdout_handle, 15)
+            print("")
+            return
 
-    else:
-        print(f"""
-  > Project : {conf.project}
-  > Local   : http://localhost:{port}/editor""")
-        if settings.pub:
-            print(f"  > PlayLan : http://{host}:{port}/editor/external")
+        except:
+            pass
+
+
+    print(f"""
+> Project : {conf.project}
+> Local   : http://localhost:{port}/editor""")
+    if settings.pub:
+        print(f"  > PlayLan : http://{host}:{port}/editor/external")
 
     print("")
 
@@ -866,7 +891,7 @@ def load_default_skip() -> list:
 
 
 def load_project_config(conf: Settings):
-    project_file = os.path.join(args.project, "phasereditor2d.config.json")
+    project_file = os.path.join(conf.project, "phasereditor2d.config.json")
     if os.path.isfile(project_file):
         with open(project_file, encoding="utf-8") as f:
             data = json.load(f)
@@ -877,7 +902,7 @@ def load_project_config(conf: Settings):
 
                 project_skips = data.get('skip', [])
                 for skip in project_skips:
-                    path = os.path.normpath(os.path.join(args.project, skip))
+                    path = os.path.normpath(os.path.join(conf.project, skip))
                     if os.path.isdir(path):
                         conf.skip_dir.append(path)
 
@@ -887,7 +912,7 @@ def load_project_config(conf: Settings):
 
                 project_plugins = data.get('plugins', [])
                 for plugin_rel in project_plugins:
-                    plugin_path = os.path.normpath(os.path.join(args.project, plugin_rel))
+                    plugin_path = os.path.normpath(os.path.join(conf.project, plugin_rel))
                     if os.path.isdir(plugin_path):
                         if not plugin_path in conf.extra_plugins:
                             conf.extra_plugins.append(plugin_path)
@@ -925,8 +950,15 @@ def reload_plugins():
     settings.plugins_map = {}
     settings.plugins_order, settings.plugins_map = discover_plugins(settings.editor)
 
-if __name__ == '__main__':
+def main():
     import uvicorn
+
+    if getattr(sys, 'frozen', False):
+        application_path = os.path.dirname(sys.executable)
+    elif __file__:
+        application_path = os.path.dirname(__file__)
+    else:
+        application_path = os.getcwd()
 
     parent_parser = argparse.ArgumentParser(add_help=True)
     parent_parser.add_argument('-port', type=int, default=3355, help='Server port (default 3355)')
@@ -940,7 +972,7 @@ if __name__ == '__main__':
     parent_parser.add_argument('-disable-colors', action='store_true', help='Don\'t print cool colors on console')
     parent_parser.add_argument('-disable-gzip', action='store_true',
                                help='Disable Gzip compression of large HTTP responses')
-    parent_parser.add_argument('-editor', type=str, metavar='path', default='editor/plugins',
+    parent_parser.add_argument('-editor', type=str, metavar='path', default=os.path.join(application_path, 'editor', 'plugins'),
                                help='Path to the \'editor\' directory (default to current directory)')
 
     args = parent_parser.parse_args()
@@ -971,6 +1003,7 @@ if __name__ == '__main__':
         extra_plugins_dir.append(global_plugins_dir)
 
     conf = Settings(
+        application_path=pathlib.Path(application_path),
         project=pathlib.Path(args.project),
         max_number_files=max_number_files,
         disable_colors=args.disable_colors,
@@ -1019,3 +1052,16 @@ if __name__ == '__main__':
         host='0.0.0.0' if public else 'localhost',
         log_config=None
     )
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+
+        print(tb)
+        with open("core-errors.log", 'w+') as f:
+            f.write(f'{tb}')
